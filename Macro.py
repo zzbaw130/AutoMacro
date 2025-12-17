@@ -7,12 +7,14 @@ import pygetwindow as gw
 import time
 import dxcam
 import win32gui
+import numpy as np
+import pydirectinput as pdi
 
 
 # windll.user32.SetProcessDPIAware()
-class CaptureParams(TypedDict, total=False):
-    roi: tuple[int, int, int, int]
-    savePath: Path | str
+class ActionParams(TypedDict, total=False):
+    pre_delay: float
+    post_delay: float
 
 
 def get_window_client_rect(hwnd):
@@ -44,29 +46,44 @@ class Macro:
         # 切换窗口有动画, 需要等待
         time.sleep(0.5)
 
-    def capture(self, **kwargs: Unpack[CaptureParams]):
+    def capture(
+        self,
+        roi: tuple[int, int, int, int] = (0, 0, 0, 0),
+        save_path: Path | str = None,
+    ):
         # self.switchToWindow()
         rect = get_window_client_rect(self.window._hWnd)
         # 指定ROI区域 x,y,w,h
-        if "roi" in kwargs and kwargs["roi"] != (0, 0, 0, 0):
-            x, y, w, h = kwargs["roi"]
+        if roi != (0, 0, 0, 0):
+            x, y, w, h = roi
             l, t, r, b = rect
             rect = (l + x, t + y, l + x + w, t + y + h)
 
         # 截图
         img = self.cam.grab(rect)
 
+        # 存在偶尔无法捕获截图的情况
         if img is None:
-            return None
+            return self.capture(roi, save_path)
 
         # 需要保存为图片
-        if "savePath" in kwargs and kwargs["savePath"] is not None:
-            path = Path(kwargs["savePath"])
-            cv2.imwrite(str(path), img)
+        if save_path:
+            # 创建路径目录
+            Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(save_path), img)
         return img
 
-    def find_image(self, template_path: Path | str, threshold=0.8):
-        """查找图像"""
+    def find_image(
+        self, template_path: Path | str, threshold=0.8
+    ) -> tuple[bool, tuple[int, int], float]:
+        """
+        查找图像
+
+        :param self: Description
+        :param template_path: 模板图片路径
+        :param threshold: 匹配阈值, 默认0.8
+        :return: 返回值形如(是否匹配成功, 在应用界面的坐标, 匹配度)
+        """
         # 查询缓存
         if str(template_path) not in self.template_cache:
             template = cv2.imread(template_path)
@@ -97,22 +114,30 @@ class Macro:
             return True, (center_x, center_y), max_val
         return False, None, max_val
 
-    def action(self):
-        pass
+    def click(self, x, y, clicks, interval, button="left", duration=None):
+        pdi.click(x, y, clicks, interval, button, duration)
 
-    def control_decorator(self, pre_delay, post_delay):
-        time.sleep(pre_delay / 1000)
-        self.action()
-        time.sleep(post_delay / 1000)
+    def drag(self, x1, y1, x2, y2):
+        pdi.mouseDown(x1, y1)
+        pdi.mouseUp(x2, y2)
+
+    def keyDown(self, key):
+        pdi.keyDown(key)
+
+    def keyUp(self, key):
+        pdi.keyUp(key)
+
+    def keyPress(self, keys: str, druation=0.01, interval=0.01):
+        keys = list(keys)
+        for key in keys:
+            pdi.keyDown(key)
+            time.sleep(druation)
+            pdi.keyUp(key)
+            time.sleep(interval)
 
 
 pm = Macro("此电脑")
 
-while True:
-    s = time.time()
-    res = pm.find_image("ces_717_191_45_28.png")
-    e = time.time()
-    print(f"耗时{e - s}")
-    print(res)
-    print()
-    time.sleep(0.2)
+res = pm.find_image("ces_717_191_45_28.png")
+x, y = res[1]
+pm.click(x, y, clicks=2, interval=0.1)
