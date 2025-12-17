@@ -7,8 +7,8 @@ import pygetwindow as gw
 import time
 import dxcam
 import win32gui
-import numpy as np
 import pydirectinput as pdi
+from onnxocr.onnx_paddleocr import ONNXPaddleOcr, sav2Img
 
 
 # windll.user32.SetProcessDPIAware()
@@ -33,8 +33,9 @@ class Macro:
         # 将指定窗口放置最前
         self.window: gw.Win32Window = gw.getWindowsWithTitle(title)[0]
         self.switchToWindow()
-        self.cam = dxcam.create(output_color="BGR")
-        self.template_cache = {}
+        self._cam = dxcam.create(output_color="BGR")
+        self._ocr_handler = ONNXPaddleOcr(use_angle_cls=False, use_gpu=False)
+        self._template_cache = {}
 
     def switchToWindow(self):
         if self.window.isActive:
@@ -46,7 +47,7 @@ class Macro:
         # 切换窗口有动画, 需要等待
         time.sleep(0.5)
 
-    def capture(
+    def grab(
         self,
         roi: tuple[int, int, int, int] = (0, 0, 0, 0),
         save_path: Path | str = None,
@@ -60,11 +61,11 @@ class Macro:
             rect = (l + x, t + y, l + x + w, t + y + h)
 
         # 截图
-        img = self.cam.grab(rect)
+        img = self._cam.grab(rect)
 
         # 存在偶尔无法捕获截图的情况
         if img is None:
-            return self.capture(roi, save_path)
+            return self.grab(roi, save_path)
 
         # 需要保存为图片
         if save_path:
@@ -85,7 +86,7 @@ class Macro:
         :return: 返回值形如(是否匹配成功, 在应用界面的坐标, 匹配度)
         """
         # 查询缓存
-        if str(template_path) not in self.template_cache:
+        if str(template_path) not in self._template_cache:
             template = cv2.imread(template_path)
             # 根据文件名称计算roi
             template_name = Path(template_path).stem
@@ -94,12 +95,12 @@ class Macro:
             except ValueError:
                 roi = (0, 0, 0, 0)
             # 根据路径缓存图片
-            self.template_cache.update({str(template_path): (template, roi)})
+            self._template_cache.update({str(template_path): (template, roi)})
         else:
-            template, roi = self.template_cache[str(template_path)]
+            template, roi = self._template_cache[str(template_path)]
 
         # 获取切片
-        screenshot = self.capture(roi=roi)
+        screenshot = self.grab(roi=roi)
 
         # 存在偶尔无法捕获截图的情况
         if screenshot is None:
@@ -113,6 +114,18 @@ class Macro:
             center_y = max_loc[1] + self.window.top + roi[1] + template.shape[0] // 2
             return True, (center_x, center_y), max_val
         return False, None, max_val
+
+    def ocr(self, image: Path | str | tuple[int, int, int, int]):
+        if type(image) is tuple:
+            img = self.grab(roi=image)
+        else:
+            img = cv2.imread(Path(image))
+
+        # 只ocr一行, 最终结果一定为单个
+        # [[xxxx], ('检测文本', 0.9989050626754761)]
+        box = self._ocr_handler.ocr(img)[0][0]
+        ocr_text = box[1][0]
+        return ocr_text
 
     def click(self, x, y, clicks, interval, button="left", duration=None):
         pdi.click(x, y, clicks, interval, button, duration)
@@ -134,10 +147,3 @@ class Macro:
             time.sleep(druation)
             pdi.keyUp(key)
             time.sleep(interval)
-
-
-pm = Macro("此电脑")
-
-res = pm.find_image("ces_717_191_45_28.png")
-x, y = res[1]
-pm.click(x, y, clicks=2, interval=0.1)
