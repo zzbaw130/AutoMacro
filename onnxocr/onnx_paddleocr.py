@@ -73,22 +73,3 @@ def sav2Img(org_img, result, name="draw_ocr.jpg"):
     im_show = draw_ocr(image, boxes, txts, scores)
     im_show = Image.fromarray(im_show)
     im_show.save(name)
-
-
-if __name__ == "__main__":
-    import cv2
-
-    model = ONNXPaddleOcr(use_angle_cls=True, use_gpu=False)
-
-    img = cv2.imread(
-        "/data2/liujingsong3/fiber_box/test/img/20230531230052008263304.jpg"
-    )
-    s = time.time()
-    result = model.ocr(img)
-    e = time.time()
-    print("total time: {:.3f}".format(e - s))
-    print("result:", result)
-    for box in result[0]:
-        print(box)
-
-    sav2Img(img, result)
