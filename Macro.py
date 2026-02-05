@@ -74,9 +74,7 @@ class Macro:
             cv2.imwrite(str(save_path), img)
         return img
 
-    def find_image(
-        self, template_path: Path | str, threshold=0.8
-    ) -> tuple[bool, tuple[int, int], float]:
+    def find_image(self, template_path: Path | str, threshold=0.8) -> tuple[bool, tuple[int, int], float]:
         """
         查找图像
 
@@ -127,7 +125,7 @@ class Macro:
         ocr_text = box[1][0]
         return ocr_text
 
-    def click(self, x, y, clicks, interval, button="left", duration=None):
+    def click(self, x, y, clicks=1, interval=0.0, button="left", duration=None):
         pdi.click(x, y, clicks, interval, button, duration)
 
     def drag(self, x1, y1, x2, y2):
@@ -140,10 +138,10 @@ class Macro:
     def keyUp(self, key):
         pdi.keyUp(key)
 
-    def keyPress(self, keys: str, druation=0.01, interval=0.01):
+    def keyPress(self, keys: str | list, duration=0.01, interval=0.01):
         keys = list(keys)
         for key in keys:
             pdi.keyDown(key)
-            time.sleep(druation)
+            time.sleep(duration)
             pdi.keyUp(key)
             time.sleep(interval)
