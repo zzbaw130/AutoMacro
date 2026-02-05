@@ -73,12 +73,12 @@ class ROISelector(QGraphicsView):
         self.dragging = False
         self.start_point = None
         self.roi_rect = None
-        
+
         # 缩放相关
         self.zoom_factor = 1.0  # 当前缩放倍率
         self.min_zoom = 0.1  # 最小缩放
-        self.max_zoom = 10.0  # 最大缩放
-        
+        self.max_zoom = 20.0  # 最大缩放
+
         # 右键拖动相关
         self.panning = False
         self.pan_start_x = 0
@@ -149,8 +149,9 @@ class ROISelector(QGraphicsView):
             self.dragging = True
             self.start_point = self.mapToScene(event.pos())
             size = self.resized_image.shape
-            self.start_point.setX(max(0, min(self.start_point.x(), size[1])))
-            self.start_point.setY(max(0, min(self.start_point.y(), size[0])))
+            # 强行转为int, 确保坐标按照像素点走
+            self.start_point.setX(int(max(0, min(self.start_point.x(), size[1]))))
+            self.start_point.setY(int(max(0, min(self.start_point.y(), size[0]))))
 
             # 移除现有的ROI图形
             if self.roi_item:
@@ -159,9 +160,7 @@ class ROISelector(QGraphicsView):
 
             # 创建新的ROI矩形
             self.roi_rect = QRectF(self.start_point, self.start_point)
-            self.roi_item = self.scene.addRect(
-                self.roi_rect, QPen(Qt.red, 2), QBrush(QColor(255, 0, 0, 50))
-            )
+            self.roi_item = self.scene.addRect(self.roi_rect, QPen(Qt.red, 1), QBrush(QColor(255, 0, 0, 50)))
         elif self.image_item and event.button() == Qt.RightButton:
             # 右键开始拖动视图
             self.panning = True
@@ -174,22 +173,19 @@ class ROISelector(QGraphicsView):
             # 右键拖动视图
             delta_x = event.x() - self.pan_start_x
             delta_y = event.y() - self.pan_start_y
-            
-            self.horizontalScrollBar().setValue(
-                self.horizontalScrollBar().value() - delta_x
-            )
-            self.verticalScrollBar().setValue(
-                self.verticalScrollBar().value() - delta_y
-            )
-            
+
+            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta_x)
+            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta_y)
+
             self.pan_start_x = event.x()
             self.pan_start_y = event.y()
         elif self.image_item and self.dragging:
             # 左键拖动选择ROI
             end_point = self.mapToScene(event.pos())
             size = self.resized_image.shape
-            end_point.setX(max(0, min(end_point.x(), size[1])))
-            end_point.setY(max(0, min(end_point.y(), size[0])))
+            # 强行转为int, 确保坐标按照像素点走
+            end_point.setX(int(max(0, min(end_point.x(), size[1]))))
+            end_point.setY(int(max(0, min(end_point.y(), size[0]))))
 
             # 更新矩形
             self.roi_rect = QRectF(self.start_point, end_point).normalized()
@@ -206,7 +202,7 @@ class ROISelector(QGraphicsView):
             if self.image_item:
                 pos = self.mapToScene(event.pos())
                 size = self.resized_image.shape
-                
+
                 # 确保坐标在图像范围内
                 if 0 <= pos.x() <= size[1] and 0 <= pos.y() <= size[0]:
                     # 转换为原始图像坐标
@@ -235,34 +231,34 @@ class ROISelector(QGraphicsView):
         if event.modifiers() == Qt.ControlModifier and self.image_item:
             # 获取滚轮滚动方向
             delta = event.angleDelta().y()
-            
+
             # 计算缩放因子 (每次滚动10%)
             if delta > 0:
                 scale_factor = 1.1
             else:
                 scale_factor = 0.9
-            
+
             # 计算新的缩放倍率
             new_zoom = self.zoom_factor * scale_factor
-            
+
             # 限制缩放范围
             if new_zoom < self.min_zoom or new_zoom > self.max_zoom:
                 return
-            
+
             # 获取鼠标在场景中的位置（缩放前）
             old_pos = self.mapToScene(event.pos())
-            
+
             # 应用缩放
             self.scale(scale_factor, scale_factor)
             self.zoom_factor = new_zoom
-            
+
             # 获取鼠标在场景中的位置（缩放后）
             new_pos = self.mapToScene(event.pos())
-            
+
             # 调整视图位置，使鼠标指向的点保持不变
             delta_pos = new_pos - old_pos
             self.translate(delta_pos.x(), delta_pos.y())
-            
+
             # 更新状态显示
             zoom_percent = int(self.zoom_factor * 100)
             if self.roi_rect:
@@ -352,16 +348,14 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.roi_selector.status_label)
 
     def open_image(self):
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "打开图像", "", "图像文件 (*.png *.jpg *.jpeg *.bmp)"
-        )
+        file_path, _ = QFileDialog.getOpenFileName(self, "打开图像", "", "图像文件 (*.png *.jpg *.jpeg *.bmp)")
 
         if file_path:
+            # 重置ROI状态
+            self.roi_selector.reset_roi()
             success = self.roi_selector.load_image(file_path)
             if success:
                 self.roi_selector.status_label.setText("拖动鼠标选择ROI")
-                # 重置ROI状态
-                self.roi_selector.reset_roi()
             else:
                 self.roi_selector.status_label.setText("无法加载图像")
                 # 确保清除无效图像
@@ -406,9 +400,7 @@ class MainWindow(QMainWindow):
                 raise RuntimeError("保存文件失败，可能是文件路径无效或格式不受支持")
 
             # 更新状态
-            self.roi_selector.status_label.setText(
-                f"ROI已导出: [X:{x}, Y:{y}, W:{w}, H{h}] 保存至: {save_path}"
-            )
+            self.roi_selector.status_label.setText(f"ROI已导出: [X:{x}, Y:{y}, W:{w}, H{h}] 保存至: {save_path}")
             QMessageBox.information(
                 self,
                 "导出成功",
