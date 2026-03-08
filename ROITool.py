@@ -1,44 +1,3 @@
-"""
-图像ROI选择工具 (Image ROI Selector Tool)
-
-功能概述：
-该应用程序是一个基于PyQt5的图像处理工具，允许用户：
-1. 打开常见格式的图像文件(PNG/JPG/JPEG/BMP)
-2. 自动缩放超大图像(大于1500px)保持宽高比
-3. 通过鼠标拖动在图像上选择矩形感兴趣区域(ROI)
-4. 实时显示ROI坐标和尺寸（包括原始图像尺寸）
-5. 重置已选择的ROI区域
-6. 导出所选ROI区域为独立图像文件
-
-主要组件：
-1. ROISelector：自定义图形视图组件
-   - 图像加载与自动缩放
-   - ROI选择交互逻辑
-   - 坐标转换（缩放图↔原始图）
-
-2. MainWindow：主窗口界面
-   - 文件打开/保存功能
-   - 按钮控制（打开/重置/导出）
-   - 状态信息显示
-
-技术栈：
-- Python 3.x
-- PyQt5 (GUI框架)
-- OpenCV (图像处理)
-- NumPy (数据转换)
-
-使用说明：
-1. 点击"打开图像"按钮选择图像文件
-2. 在图像上按住鼠标左键拖动选择ROI区域
-3. 实时显示ROI的位置和尺寸信息
-4. 使用"重置ROI"按钮可重新选择
-5. 点击"导出ROI"保存选择区域到文件
-
-作者：ziyuhaokun
-日期：2025-07-31
-版本：0.1-beta
-"""
-
 import pathlib
 import sys
 import cv2
@@ -55,9 +14,11 @@ from PyQt5.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QMessageBox,
+    QGraphicsTextItem,
+    QInputDialog,
 )
 from PyQt5.QtCore import Qt, QRectF
-from PyQt5.QtGui import QImage, QPixmap, QPen, QBrush, QColor
+from PyQt5.QtGui import QImage, QPixmap, QPen, QBrush, QColor, QPainter
 
 
 class ROISelector(QGraphicsView):
@@ -69,10 +30,11 @@ class ROISelector(QGraphicsView):
         self.image_item = None
         self.origin_image = None  # 原始图像数据
         self.scale_ratio = 1.0
-        self.roi_item = None
+        self.roi_items = []
+        self.active_roi_item = None
         self.dragging = False
         self.start_point = None
-        self.roi_rect = None
+        self.active_roi_rect = None
 
         # 缩放相关
         self.zoom_factor = 1.0  # 当前缩放倍率
@@ -97,16 +59,6 @@ class ROISelector(QGraphicsView):
         # 获取原始尺寸
         h, w = orig_image.shape[:2]
 
-        # 判断是否需要缩放
-        # if w > 1500 or h > 1500:
-        #     # 计算缩放比例 (保持宽高比)
-        #     scale = 1500 / max(w, h)
-        #     new_w = int(w * scale)
-        #     new_h = int(h * scale)
-        #     resized_image = cv2.resize(orig_image, (new_w, new_h))
-        #     self.scale_ratio = scale
-        #     print(f"图像已缩放: {w}x{h} -> {new_w}x{new_h}")
-        # else:
         resized_image = orig_image
         self.scale_ratio = 1.0
 
@@ -131,18 +83,32 @@ class ROISelector(QGraphicsView):
         self.resetTransform()
         return True
 
-    def get_original_roi(self):
+    def get_original_roi_from_rect(self, rect):
         """获取原始图像中的ROI坐标"""
-        if self.roi_rect is None:
-            return (0, 0, 0, 0)  # 返回默认值而不是None
+        if rect is None:
+            return (0, 0, 0, 0)
 
         # 将缩放后的坐标转换回原始图像坐标
-        x = int(self.roi_rect.x() / self.scale_ratio)
-        y = int(self.roi_rect.y() / self.scale_ratio)
-        w = int(self.roi_rect.width() / self.scale_ratio)
-        h = int(self.roi_rect.height() / self.scale_ratio)
+        x = int(rect.x() / self.scale_ratio)
+        y = int(rect.y() / self.scale_ratio)
+        w = int(rect.width() / self.scale_ratio)
+        h = int(rect.height() / self.scale_ratio)
 
         return x, y, w, h
+
+    def add_roi_label(self, rect, coords, roi_name):
+        text = f"{roi_name}\n{coords[0]},{coords[1]}\n{coords[2]},{coords[3]}"
+        label_item = QGraphicsTextItem(text)
+        # 修改label字体大小
+        font = label_item.font()
+        font.setPointSize(8)
+        label_item.setFont(font)
+        label_item.setDefaultTextColor(QColor(255, 255, 255))
+        text_rect = label_item.boundingRect()
+        center = rect.center()
+        label_item.setPos(center.x() - text_rect.width() / 2, center.y() - text_rect.height() / 2)
+        self.scene.addItem(label_item)
+        return label_item
 
     def mousePressEvent(self, event):
         if self.image_item and event.button() == Qt.LeftButton:
@@ -153,15 +119,30 @@ class ROISelector(QGraphicsView):
             self.start_point.setX(int(max(0, min(self.start_point.x(), size[1]))))
             self.start_point.setY(int(max(0, min(self.start_point.y(), size[0]))))
 
-            # 移除现有的ROI图形
-            if self.roi_item:
-                self.scene.removeItem(self.roi_item)
-                self.roi_item = None
-
-            # 创建新的ROI矩形
-            self.roi_rect = QRectF(self.start_point, self.start_point)
-            self.roi_item = self.scene.addRect(self.roi_rect, QPen(Qt.red, 1), QBrush(QColor(255, 0, 0, 50)))
+            # 创建新的ROI矩形（当前绘制）
+            self.active_roi_rect = QRectF(self.start_point, self.start_point)
+            self.active_roi_item = self.scene.addRect(
+                self.active_roi_rect,
+                QPen(Qt.red, 1),
+                QBrush(QColor(255, 0, 0, 150)),
+            )
         elif self.image_item and event.button() == Qt.RightButton:
+            click_pos = self.mapToScene(event.pos())
+            for item in reversed(self.roi_items):
+                if item["rect"].contains(click_pos):
+                    self.scene.removeItem(item["rect_item"])
+                    self.scene.removeItem(item["label_item"])
+                    self.roi_items.remove(item)
+                    zoom_percent = int(self.zoom_factor * 100)
+                    if self.roi_items:
+                        x, y, w, h = self.roi_items[-1]["coords"]
+                        self.status_label.setText(
+                            f"已删除ROI | 剩余: {len(self.roi_items)} | 最后ROI: [X: {x}, Y: {y}, W: {w}, H: {h}] | 缩放: {zoom_percent}%"
+                        )
+                    else:
+                        self.status_label.setText(f"已删除ROI | 缩放: {zoom_percent}%")
+                    return
+
             # 右键开始拖动视图
             self.panning = True
             self.pan_start_x = event.x()
@@ -188,13 +169,13 @@ class ROISelector(QGraphicsView):
             end_point.setY(int(max(0, min(end_point.y(), size[0]))))
 
             # 更新矩形
-            self.roi_rect = QRectF(self.start_point, end_point).normalized()
-            if self.roi_item:
-                self.roi_item.setRect(self.roi_rect)
+            self.active_roi_rect = QRectF(self.start_point, end_point).normalized()
+            if self.active_roi_item:
+                self.active_roi_item.setRect(self.active_roi_rect)
 
             # 更新状态
-            if self.roi_rect:  # 确保roi_rect存在
-                x, y, w, h = self.get_original_roi()
+            if self.active_roi_rect:
+                x, y, w, h = self.get_original_roi_from_rect(self.active_roi_rect)
                 zoom_percent = int(self.zoom_factor * 100)
                 self.status_label.setText(f"ROI: [X: {x}, Y: {y}, W: {w}, H: {h}] | 缩放: {zoom_percent}%")
         else:
@@ -215,11 +196,45 @@ class ROISelector(QGraphicsView):
         if self.dragging and event.button() == Qt.LeftButton:
             self.dragging = False
             # 最终ROI显示
-            if self.roi_rect:
-                x, y, w, h = self.get_original_roi()
-                zoom_percent = int(self.zoom_factor * 100)
-                self.status_label.setText(f"选择完成: [X: {x}, Y: {y}, W: {w}, H: {h}] | 缩放: {zoom_percent}%")
-                print(f"选择的ROI (原始尺寸): X={x}, Y={y}, Width={w}, Height={h}")
+            if self.active_roi_rect and self.active_roi_item:
+                x, y, w, h = self.get_original_roi_from_rect(self.active_roi_rect)
+                if w > 0 and h > 0:
+                    # 提示用户输入ROI名称
+                    default_name = "roi"
+                    roi_name, ok = QInputDialog.getText(self, "ROI命名", "请输入ROI名称:", text=default_name)
+                    roi_name = roi_name.strip() if ok else ""
+                    if not roi_name:
+                        roi_name = default_name
+
+                    # 为ROI区域添加标签
+                    label_item = self.add_roi_label(self.active_roi_rect, (x, y, w, h), roi_name)
+
+                    # 记录roi
+                    self.roi_items.append(
+                        {
+                            # 存储当前ROI的QRectF对象，方便后续删除时使用
+                            "rect": self.active_roi_rect,
+                            # 存储当前ROI的QGraphicsRectItem对象，方便后续删除时使用
+                            "rect_item": self.active_roi_item,
+                            # 存储当前ROI的标签项，方便后续删除时使用
+                            "label_item": label_item,
+                            # 存储原始图像中的ROI坐标
+                            "coords": (x, y, w, h),
+                            # 存储用户输入的ROI名称
+                            "name": roi_name,
+                            # 存储原始图像中的ROI数据
+                            "data": self.origin_image[y : y + h, x : x + w],
+                        }
+                    )
+                    zoom_percent = int(self.zoom_factor * 100)
+                    self.status_label.setText(
+                        f"选择完成: [X: {x}, Y: {y}, W: {w}, H: {h}] | 总数: {len(self.roi_items)} | 缩放: {zoom_percent}%"
+                    )
+                    print(f"选择的ROI (原始尺寸): X={x}, Y={y}, Width={w}, Height={h}")
+                else:
+                    self.scene.removeItem(self.active_roi_item)
+                self.active_roi_item = None
+                self.active_roi_rect = None
         elif self.panning and event.button() == Qt.RightButton:
             # 右键释放，停止拖动
             self.panning = False
@@ -261,9 +276,11 @@ class ROISelector(QGraphicsView):
 
             # 更新状态显示
             zoom_percent = int(self.zoom_factor * 100)
-            if self.roi_rect:
-                x, y, w, h = self.get_original_roi()
-                self.status_label.setText(f"ROI: [X: {x}, Y: {y}, W: {w}, H: {h}] | 缩放: {zoom_percent}%")
+            if self.roi_items:
+                x, y, w, h = self.roi_items[-1]["coords"]
+                self.status_label.setText(
+                    f"ROI: [X: {x}, Y: {y}, W: {w}, H: {h}] | 总数: {len(self.roi_items)} | 缩放: {zoom_percent}%"
+                )
             else:
                 self.status_label.setText(f"拖动鼠标选择ROI | 缩放: {zoom_percent}%")
         else:
@@ -272,41 +289,15 @@ class ROISelector(QGraphicsView):
 
     def reset_roi(self):
         """重置当前ROI选择"""
-        if self.roi_item:
-            self.scene.removeItem(self.roi_item)
-            self.roi_item = None
-        self.roi_rect = None
+        if self.active_roi_item:
+            self.scene.removeItem(self.active_roi_item)
+            self.active_roi_item = None
+        for item in self.roi_items:
+            self.scene.removeItem(item["rect_item"])
+            self.scene.removeItem(item["label_item"])
+        self.roi_items = []
+        self.active_roi_rect = None
         self.status_label.setText("ROI已重置")
-        print("ROI已重置")
-
-    def export_roi(self):
-        """导出当前选择的ROI为图像文件"""
-        # 检查是否加载了图像 (使用is None检查而不是布尔值判断)
-        if self.origin_image is None:
-            return False, "没有加载图像", None
-
-        # 检查是否选择了ROI
-        if self.roi_rect is None:
-            return False, "没有选择ROI区域", None
-
-        # 获取原始图像中的ROI坐标
-        x, y, w, h = self.get_original_roi()
-
-        # 确保ROI区域在图像范围内
-        img_height, img_width = self.origin_image.shape[:2]
-        if x >= img_width or y >= img_height or w <= 0 or h <= 0:
-            return False, "无效的ROI区域", None
-
-        # 调整坐标边界
-        x = max(0, min(x, img_width - 1))
-        y = max(0, min(y, img_height - 1))
-        w = min(w, img_width - x)
-        h = min(h, img_height - y)
-
-        # 提取ROI区域
-        roi = self.origin_image[y : y + h, x : x + w]
-
-        return True, roi, (x, y, w, h)
 
 
 class MainWindow(QMainWindow):
@@ -332,10 +323,10 @@ class MainWindow(QMainWindow):
         self.btn_open.clicked.connect(self.open_image)
         btn_layout.addWidget(self.btn_open)
 
-        # 重置按钮
-        self.btn_reset = QPushButton("重置ROI")
-        self.btn_reset.clicked.connect(self.roi_selector.reset_roi)
-        btn_layout.addWidget(self.btn_reset)
+        # 导出标注图按钮
+        self.btn_export_annotated = QPushButton("导出标注图")
+        self.btn_export_annotated.clicked.connect(self.export_annotated_image)
+        btn_layout.addWidget(self.btn_export_annotated)
 
         # 导出ROI按钮
         self.btn_export = QPushButton("导出ROI")
@@ -364,52 +355,65 @@ class MainWindow(QMainWindow):
 
     def export_roi(self):
         """处理导出ROI图像的操作"""
-        success, roi_img, roi_coords = self.roi_selector.export_roi()
-
-        if not success:
-            if roi_img == "没有加载图像":
-                QMessageBox.warning(self, "导出失败", "请先打开一个图像文件")
-            elif roi_img == "没有选择ROI区域":
-                QMessageBox.warning(self, "导出失败", "请先选择一个ROI区域")
-            else:
-                QMessageBox.warning(self, "导出失败", "无法导出ROI区域：" + roi_img)
+        if self.roi_selector.origin_image is None:
+            QMessageBox.warning(self, "导出失败", "没有加载图像或没有选择ROI")
             return
 
-        # 获取保存路径
-        save_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "保存ROI图像",
-            "",
-            "PNG图像 (*.png);;JPEG图像 (*.jpg *.jpeg);;所有文件 (*)",
-        )
+        roi_list = self.roi_selector.roi_items
+        if len(roi_list) == 0:
+            QMessageBox.warning(self, "导出失败", "没有选择任何ROI")
+            return
 
-        if not save_path:
-            return  # 用户取消了保存操作
-
-        # 添加文件后缀标识
-        name, suffix = save_path.split(".")
-        x, y, w, h = roi_coords
-        save_path = f"{name}_{x}_{y}_{w}_{h}.{suffix}"
-
-        # 保存ROI图像
         try:
-            cv2.imwrite(save_path, roi_img)
-            # 检查是否保存成功
-            saved_image = cv2.imread(save_path)
-            if saved_image is None:
-                raise RuntimeError("保存文件失败，可能是文件路径无效或格式不受支持")
+            # 获取保存目录
+            save_dir = QFileDialog.getExistingDirectory(self, "选择导出目录")
+            if not save_dir:
+                return
 
-            # 更新状态
-            self.roi_selector.status_label.setText(f"ROI已导出: [X:{x}, Y:{y}, W:{w}, H{h}] 保存至: {save_path}")
-            QMessageBox.information(
-                self,
-                "导出成功",
-                f"ROI图像已成功保存到:\n{save_path}\n尺寸: {w} x {h} 像素",
-            )
-            print(f"ROI图像已导出: {save_path} (尺寸: {w}x{h})")
+            saved_paths = []
+            img_height, img_width = self.roi_selector.origin_image.shape[:2]
+
+            for item in roi_list:
+                roi_img = item["data"]
+                x, y, w, h = item["coords"]
+                roi_name = item["name"]
+
+                # 命名规范 resolution-ROI-name
+                save_path = pathlib.Path(save_dir) / f"{img_width}x{img_height}-{roi_name}-{x}_{y}_{w}_{h}.png"
+                cv2.imwrite(str(save_path), roi_img)
+
+                saved_paths.append(str(save_path))
+
+            QMessageBox.information(self, "导出成功", f"ROI图像已成功保存到:\n{save_dir}\n数量: {len(roi_list)}")
+
         except Exception as e:
             QMessageBox.critical(self, "保存失败", f"保存图像时出错:\n{str(e)}")
-            self.roi_selector.status_label.setText("ROI导出失败: " + str(e))
+
+    def export_annotated_image(self):
+        """导出带ROI标注的整图"""
+        if self.roi_selector.origin_image is None:
+            QMessageBox.warning(self, "导出失败", "没有加载图像或没有选择ROI")
+            return
+
+        filePath, _ = QFileDialog.getSaveFileName(self, "保存图片", "", "PNG Files (*.png)")
+        if not filePath:
+            return
+
+        # 获取场景的边界矩形
+        scene = self.roi_selector.scene
+        rect = scene.sceneRect()
+
+        # 创建QImage
+        image = QImage(int(rect.width()), int(rect.height()), QImage.Format_ARGB32)
+
+        # 创建QPainter并渲染场景
+        painter = QPainter(image)
+        scene.render(painter, QRectF(image.rect()), rect)
+        painter.end()
+
+        # 保存图片
+        image.save(filePath)
+        QMessageBox.information(self, "导出成功", f"标注图已成功保存到:\n{filePath}")
 
 
 if __name__ == "__main__":

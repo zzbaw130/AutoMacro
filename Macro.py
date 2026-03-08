@@ -10,7 +10,7 @@ import win32gui
 from pynput.keyboard import Controller as keyCtrl, Key
 from pynput.mouse import Controller as mouseCtrl, Button
 import random
-from onnxocr.onnx_paddleocr import ONNXPaddleOcr, sav2Img
+from .onnxocr.onnx_paddleocr import ONNXPaddleOcr, sav2Img
 
 
 # windll.user32.SetProcessDPIAware()
@@ -89,7 +89,7 @@ KB_MAPPING = {
 }
 
 
-def get_window_client_rect(hwnd):
+def get_window_client_rect(hwnd) -> tuple[int, int, int, int]:
     # 获取客户区矩形
     client_rect = win32gui.GetClientRect(hwnd)
     # 转换为屏幕坐标
@@ -99,7 +99,7 @@ def get_window_client_rect(hwnd):
     return left, top, right, bottom
 
 
-def isListEmpty(alist):
+def isListEmpty(alist: list) -> bool:
     if isinstance(alist, list):
         return all(map(isListEmpty, alist))
     return False
@@ -110,6 +110,8 @@ class Macro:
         self.title: str = title
         # 将指定窗口放置最前
         self.window: gw.Win32Window = gw.getWindowsWithTitle(title)[0]
+        l, t, r, b = get_window_client_rect(self.window._hWnd)
+        self.resolution = (r - l, b - t)
         self.switchToWindow()
         self.keyboard = keyCtrl()
         self.mouse = mouseCtrl()
@@ -155,24 +157,36 @@ class Macro:
             cv2.imwrite(str(save_path), img)
         return img
 
-    def find_image(self, template_path: Path | str, threshold=0.8) -> tuple[bool, tuple[int, int], float]:
+    def find_image(
+        self, template_path: Path | str, roi: tuple[int, int, int, int] = None, threshold=0.8
+    ) -> tuple[bool, tuple[int, int], float]:
         """
         查找图像
 
         :param self: Description
-        :param template_path: 模板图片路径
+        :param template_path: 模板图片路径,
+            实际存储的模板图片命名格式为resolution-x_y_w_h-name.png, 其中resolution为当前应用分辨率,
+            x,y,w,h为ROI, name为图片名称, 例如1920x1080-100_200_300_400-start_button.png
+            正式使用时, 只需要传入name.png部分即可, 例如start_button.png, 程序会根据当前应用分辨率自动寻找对应的模板图片
+        :param roi: 查找范围, 格式为(x, y, w, h), 若设置了此参数, 则会覆盖模板图片命名中的roi参数
         :param threshold: 匹配阈值, 默认0.8
-        :return: 返回值形如(是否匹配成功, 在应用界面的坐标, 匹配度)
+        :return: 返回值形如(是否匹配成功, 在应用界面的中心坐标, 模板的roi)
         """
+        # 寻找模板图片
+        tp = Path(template_path)
+        w, h = self.resolution
+        template_path = list(tp.parent.glob(f"{w}x{h}-{tp.stem}-*{tp.suffix}"))[0]
         # 查询缓存
         if str(template_path) not in self._template_cache:
             template = cv2.imread(template_path)
-            # 根据文件名称计算roi
-            template_name = Path(template_path).stem
-            try:
-                roi = tuple([int(i) for i in template_name.split("_")[-4:]])
-            except ValueError:
-                roi = (0, 0, 0, 0)
+            # 如果没有设置roi, 则尝试从文件名中解析roi
+            if roi is None:
+                # 根据文件名称计算roi
+                template_name = Path(template_path).stem
+                try:
+                    roi = tuple([int(i) for i in template_name.split("-")[-1].split("_")])
+                except ValueError:
+                    roi = (0, 0, 0, 0)
             # 根据路径缓存图片
             self._template_cache.update({str(template_path): (template, roi)})
         else:
@@ -183,16 +197,16 @@ class Macro:
 
         # 存在偶尔无法捕获截图的情况
         if screenshot is None:
-            return False, None, 0.0
+            return False, None, None
 
         result = cv2.matchTemplate(screenshot, template, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, max_loc = cv2.minMaxLoc(result)
         if max_val >= threshold:
-            cl, ct, _, _ = get_window_client_rect(self.window._hWnd)
-            center_x = max_loc[0] + cl + roi[0] + template.shape[1] // 2
-            center_y = max_loc[1] + ct + roi[1] + template.shape[0] // 2
-            return True, (center_x, center_y), max_val
-        return False, None, max_val
+            center_x = max_loc[0] + roi[0] + template.shape[1] // 2
+            center_y = max_loc[1] + roi[1] + template.shape[0] // 2
+            template_roi = (roi[0] + max_loc[0], roi[1] + max_loc[1], template.shape[1], template.shape[0])
+            return True, (center_x, center_y), template_roi
+        return False, None, None
 
     def ocr(self, image_or_roi: Path | str | tuple[int, int, int, int]):
         if type(image_or_roi) is tuple:
