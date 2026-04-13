@@ -5,6 +5,7 @@ from typing import TypedDict, Unpack
 import cv2
 import pygetwindow as gw
 import time
+import random
 import dxcam
 import win32gui
 import pydirectinput as pdi
@@ -37,6 +38,17 @@ class Macro:
         self._ocr_handler = ONNXPaddleOcr(use_angle_cls=False, use_gpu=False)
         self._template_cache = {}
 
+    def random_delay(self, sec:int, float_range:float):
+        """
+        随机延迟
+
+        :param ms: 指定延迟的ms
+        :param float_range: 在ms的基础上偏移指定范围, 默认偏移百分之十(0.1)
+        """
+        ms = sec * 1000
+        random_delay_in_ms = random.randint(int(ms * (1 - float_range)), int(ms * (1 + float_range)))
+        time.sleep(random_delay_in_ms / 1000)
+
     def switchToWindow(self):
         if self.window.isActive:
             return
@@ -45,7 +57,7 @@ class Macro:
             self.window.restore()
         self.window.activate()
         # 切换窗口有动画, 需要等待
-        time.sleep(0.5)
+        self.random_delay(0.5)
 
     def grab(
         self,
@@ -140,10 +152,10 @@ class Macro:
     def keyUp(self, key):
         pdi.keyUp(key)
 
-    def keyPress(self, keys: str, druation=0.01, interval=0.01):
+    def keyPress(self, keys: str, druation=0.1, interval=0.1):
         keys = list(keys)
         for key in keys:
             pdi.keyDown(key)
-            time.sleep(druation)
+            self.random_delay(druation)
             pdi.keyUp(key)
-            time.sleep(interval)
+            self.random_delay(interval)
