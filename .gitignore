@@ -6,5 +6,6 @@ build/
 dist/
 resource/
 *.png
+*.jpg
 uv.lock
 Test.py
